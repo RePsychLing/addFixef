@@ -1,0 +1,74 @@
+# Automating adding fixed effects to a simple model.
+
+Laurel Brehm (laurel.brehm@mpi.nl), 28-Feb 2020
+
+Here's a simple way to test whether adding a fixed effect to a model improves fit. This takes advantage of Julia's delightful ability to swap in variables in model formulas.  These models are then compared to the basic model to see if the extra parameter improves model fit. This is like the likelihood ratio test done in (g)lmer, but compares differences in objective function instead. (See Doug Bates's 'complexity in model fitting' vignette for more).
+
+# Setup
+
+```julia;label=packages;term=true
+using Pkg, CSV, MixedModels, StatsModels
+Pkg.add("Distributions")
+using Distributions
+```
+
+# Reading data
+
+Read in the csv that contains the data. 
+
+
+These are data on word production (Brehm & Meyer, submitted Feb 2020). There are 2 (Dutch) words produced per trial, a picture named by speaker A followed by one named by speaker B. The question is what properties of utterance A matter for onset time of utterance B.
+These particular data are the one-word subset from a larger experiment where A said either one or two words. There's also some blocking such that easy trials are put together, and hard trials are put together-- this is a bit complex for present purposes so I omitted it.
+
+```julia; label=load, term=true
+vks = CSV.read("bm2020partialData.csv");
+first(vks, 10)
+```
+
+
+# Fit minimal model
+Start by building a model that predicts the onset of B from offset of A based upon a global intercept plus three random intercepts based on the subject, the picture given to A, and the picture given to B.
+
+```julia; label=fitting, term=true
+const HC = HelmertCoding();
+const contrasts = Dict(:a_words => HC);
+
+intOnly = @formula b_offA ~ 1 +  (1 | subj) +
+                              (1 | b_name) +
+                              (1 | a_name);
+intMfit = fit(MixedModel, intOnly, vks, contrasts=contrasts);
+```
+
+# Add predictors one at a time: what is reliably informative?
+
+```julia; label=manymodels, term=true
+
+vars = [:a_on, :a_off, :rolling_b_on, :rolling_b_off]
+
+fits = map(vars) do v
+  newFormula = intOnly.lhs ~ intOnly.rhs + term(v)
+  fit(MixedModel, newFormula, vks, contrasts=contrasts)
+end
+```
+
+# Test each model vs intercept-only using differences in objective function
+```julia; label=ofTest, term=true
+
+#first initalize a matrix
+lv = length(vars)
+ofa = Array{Float64}(undef,lv,3)
+
+#then fill it up with objective difference, df difference, and run chisq on that.
+for v in 1:lv
+  ld = diff(objective.([fits[v],intMfit]))[1]
+  dd = diff(dof.([intMfit, fits[v]]))[1]
+  pc = ccdf(Chisq(dd), ld)
+  ofa[v,1:3] = [ld, dd, pc]
+end
+
+ofa
+```
+
+From these data, we see that adding the onset of A doesn't improve model fit, but the other parameters do matter. The largest gain on the objective function in fact comes from the rolling_b_on parameter, which probably picks up on the block structure of the experiment (easy vs hard trials were blocked). But also, people are keying in on the offset time of the other speaker, which suggests it's used to coordinate speech planning in a simple dialogue.
+
+ 
